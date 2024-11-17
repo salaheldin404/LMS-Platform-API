@@ -49,10 +49,11 @@ export const getLessons = catchAsync(async (req, res, next) => {
       chapter: lesson.chapter,
       course: lesson.course,
       completed: completedLesson ? true : false,
+      order: lesson.order,
     };
 
     // Include video information if the user is enrolled
-    if (checkPermission) {
+    if (checkPermission && !lessonInfo.locked) {
       console.log(checkPermission, "check");
       lessonInfo.video = lesson.video; // Include the video info
     }
@@ -70,12 +71,18 @@ export const getLesson = catchAsync(async (req, res, next) => {
   if (!lesson) {
     next(new AppError("No lesson found with this ID", 404));
   }
+  const progress = await Progress.findOne({
+    user: user._id,
+    course: lesson.course._id,
+  });
   const checkPermission =
     user.enrolledCourses?.some((id) => id.equals(lesson.course._id)) ||
     user.createdCourses?.some((id) => id.equals(lesson.course._id)) ||
     user.role == "admin";
-
-  if (!checkPermission) {
+  const unlockLesson = progress?.unlockedLessons.find((unlock) =>
+    unlock._id.equals(lesson._id)
+  );
+  if (!checkPermission || !unlockLesson) {
     lesson.video = undefined;
   }
 
@@ -367,15 +374,18 @@ export const markLessonComplete = catchAsync(async (req, res, next) => {
   const completedIndex = progress.completedLessons.findIndex((prog) =>
     prog.lessonId.equals(lesson._id)
   );
+  console.log({ completedIndex, completedData: progress.completedLessons });
   if (completedIndex == -1) {
     progress.completedLessons.push({
       lessonId: lesson._id,
       completionDate: new Date(),
     });
     const completedLessons = progress.completedLessons.length;
-    const allLessons = await Lesson.find({ course: courseId }).sort({ order: 1 }).lean();
+    const allLessons = await Lesson.find({ course: courseId })
+      .sort({ order: 1 })
+      .lean();
     const nextLesson = allLessons.filter((l) => l.order > lesson.order)[0];
-
+    console.log({ nextLesson, allLessons });
     if (nextLesson && !progress.unlockedLessons.includes(nextLesson._id)) {
       progress.unlockedLessons.push(nextLesson._id);
     }
