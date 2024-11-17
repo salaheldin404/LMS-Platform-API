@@ -11,16 +11,42 @@ import userRoutes from "./routes/userRoutes.js";
 import globalError from "./controller/errorController.js";
 
 import AppError from "./utils/appError.js";
+import helmet from "helmet";
+import hpp from "hpp";
+import compression from "compression";
+import mongoSanitize from "express-mongo-sanitize";
+import { rateLimit } from "express-rate-limit";
+
 const app = express();
 
-app.use(express.json());
+app.use(express.json({ limit: "10kb" }));
+
+app.use(helmet({ contentSecurityPolicy: false }));
+
 app.use(cookieParser());
+
 app.use(
   cors({
-    origin: "http://localhost:3000",
+    origin: process.env.FRONTEND_URL,
+    methods: ["GET", "POST", "PUT", "DELETE", "PATCH"],
+    allowedHeaders: ["Content-Type", "Authorization"],
     credentials: true,
   })
 );
+
+const apiLimiter = rateLimit({
+  maximum: 100,
+  windowMs: 60 * 60 * 1000,
+  message: "Too many requests from this IP, please try again in an hour!",
+});
+
+app.use("/api", apiLimiter);
+
+app.use(mongoSanitize());
+app.use(helmet.xssFilter());
+app.use(hpp());
+
+app.use(compression());
 
 app.use("/api/v1/auth", authRoutes);
 app.use("/api/v1/courses", courseRoutes);
