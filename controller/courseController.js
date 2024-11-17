@@ -1,8 +1,12 @@
+import mongoose from "mongoose";
 import { fileURLToPath } from "url";
+import Rating from "../models/ratingModel.js";
 import Course from "../models/courseModel.js";
 import Chapter from "../models/chapterModel.js";
 import Lesson from "../models/lessonModel.js";
 import User from "../models/userModel.js";
+import Progress from "../models/progressModel.js";
+import Enrollment from "../models/enrollmentModel.js";
 
 import {
   cloudinaryDeleteImage,
@@ -17,10 +21,12 @@ import fs from "fs";
 import path from "path";
 import generateCertificateFile from "../utils/generateCertificateFile.js";
 
-import Progress from "../models/progressModel.js";
+import cacheService from "../utils/cacheService.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+// const cacheService = new CacheService();
 
 export const createCourse = catchAsync(async (req, res, next) => {
   const { title, description, price } = req.body;
@@ -155,37 +161,50 @@ export const deleteCourse = catchAsync(async (req, res, next) => {
 export const getAllCourses = catchAsync(async (req, res, next) => {
   const queryObj = { ...req.query };
 
-  const excludeFields = ["page", "sort", "limit", "fields"];
-  excludeFields.forEach((el) => delete queryObj[el]);
+  const cacheKey = `courses:catalog:${JSON.stringify(queryObj)}`;
 
-  let queryStr = JSON.stringify(queryObj);
-  queryStr = queryStr.replace(/\b(gte|gt|lte|lt)\b/g, (match) => `$${match}`);
+  let courses = await cacheService.get(cacheKey);
+  if (!courses) {
+    const excludeFields = ["page", "sort", "limit", "fields"];
+    excludeFields.forEach((el) => delete queryObj[el]);
 
-  let query = Course.find(JSON.parse(queryStr));
+    let queryStr = JSON.stringify(queryObj);
+    queryStr = queryStr.replace(/\b(gte|gt|lte|lt)\b/g, (match) => `$${match}`);
 
-  // sorting
-  if (req.query.sort) {
-    const sortBy = req.query.sort.split(",").join(" ");
-    query = query.sort(sortBy);
-  } else {
-    query = query.sort("-createdAt");
+    let query = Course.find(JSON.parse(queryStr));
+
+    // sorting
+    if (req.query.sort) {
+      const sortBy = req.query.sort.split(",").join(" ");
+      query = query.sort(sortBy);
+    } else {
+      query = query.sort("-createdAt");
+    }
+
+    // limit fields
+    if (req.query.fields) {
+      const fields = req.query.fields.split(",").join(" ");
+      query = query.select(fields);
+    } else {
+      query = query.select("-__v -students");
+    }
+
+    // add pagenation
+    // pagination
+    const limit = Math.max(1, parseInt(req.query.limit) || 10);
+    const page = Math.max(1, parseInt(req.query.page) || 1);
+    const skip = (page - 1) * limit;
+    courses = await query.skip(skip).limit(limit);
+    if (courses.length > 0) {
+      await cacheService.set(
+        cacheKey,
+        courses,
+        cacheService.CACHE_DURATION.CATALOG
+      );
+    }
   }
 
-  // limit fields
-  if (req.query.fields) {
-    const fields = req.query.fields.split(",").join(" ");
-    query = query.select(fields);
-  } else {
-    query = query.select("-__v -students");
-  }
-
-  // add pagenation
-  // pagination
-  const limit = parseInt(req.query.limit) || 10;
-  const page = parseInt(req.query.page) || 1;
-  const skip = (page - 1) * limit;
-
-  const courses = await query.skip(skip).limit(limit);
+  // const courses = await query.skip(skip).limit(limit);
   res.status(200).json({ data: courses });
 });
 
@@ -202,39 +221,108 @@ export const getCoursesForCurrentInstructor = catchAsync(
 export const getCourseById = catchAsync(async (req, res, next) => {
   const { courseId } = req.params;
 
-  const course = await Course.findById(courseId);
+  const cacheKey = `course:${courseId}`;
+
+  let cachedData = await cacheService.get(cacheKey);
+  if (cachedData) {
+    return res.status(200).json({ data: cachedData });
+  }
+  const course = await Course.findById(courseId)
+    .populate({
+      path: "instructor",
+      select: "username profilePicture.url ",
+    })
+    .populate({
+      path: "ratings",
+      select: "user rating comment",
+    });
   if (!course) {
     return next(new AppError("no course found with this id", 404));
   }
-
+  await cacheService.set(cacheKey, course, cacheService.CACHE_DURATION.COURSE);
   res.status(200).json({ data: course });
 });
 
 export const getSearchCourses = catchAsync(async (req, res, next) => {
   const { keyword, page = 1, limit = 10 } = req.query;
+  // Create index hint for optimization
+  const searchIndex = "title_text_description_text";
+  const cacheKey = `courses:search:${keyword}`;
+  const cachedData = await cacheService.get(cacheKey);
+  if (cachedData) {
+    return res.status(200).json({ data: cachedData });
+  }
 
-  const query = {
-    $or: [
-      { title: { $regex: keyword, $options: "i" } },
-      { description: { $regex: keyword, $options: "i" } },
-    ],
-  };
+  const searchRegex = new RegExp(keyword, "i");
+  const query = keyword
+    ? {
+        $or: [{ title: searchRegex }, { description: searchRegex }],
+      }
+    : {};
 
-  const courses = await Course.find(query)
-    .skip((page - 1) * limit)
-    .limit(parseInt(limit));
-  const totalCourses = await Course.countDocuments(query);
+  const [courses, totalCourses] = await Promise.all([
+    await Course.find(query)
+      .hint(searchIndex)
+      .skip((page - 1) * limit)
+      .limit(parseInt(limit))
+      .lean(),
+    await Course.countDocuments(query),
+  ]);
 
   if (!courses.length) {
     return next(new AppError("no course found with this keyword", 404));
   }
-
-  res.status(200).json({
-    data: courses,
+  const result = {
+    courses,
     totalCourses,
     totalPages: Math.ceil(totalCourses / limit),
-  });
+  };
+  await cacheService.set(cacheKey, result, cacheService.CACHE_DURATION.SEARCH);
+
+  res.status(200).json(result);
 });
+
+const updateCourseRatingSummary = async (courseId) => {
+  const [ratingSummary] = await Rating.aggregate([
+    {
+      $match: {
+        course: mongoose.Types.ObjectId(courseId),
+        rate: { $gte: 1, $lte: 5 },
+      },
+    },
+    {
+      $group: {
+        _id: "$course",
+        averageRating: { $avg: "$rate" },
+        totalRatings: { $sum: 1 },
+      },
+    },
+    {
+      $project: {
+        _id: 0,
+        averageRating: { $round: ["$averageRating", 2] },
+        totalRatings: 1,
+      },
+    },
+  ])
+    .hint({ course: 1, rate: 1 })
+    .exec();
+
+  return await Course.findByIdAndUpdate(
+    courseId,
+    {
+      $set: {
+        "ratingsSummary.averageRating": ratingSummary?.averageRating || 0,
+        "ratingsSummary.totalRatings": ratingSummary?.totalRatings || 0,
+      },
+    },
+    {
+      new: true,
+      select: "ratingsSummary",
+      lean: true,
+    }
+  );
+};
 
 export const addRatingToCourse = catchAsync(async (req, res, next) => {
   const { courseId } = req.params;
@@ -244,34 +332,95 @@ export const addRatingToCourse = catchAsync(async (req, res, next) => {
   if (rate < 1 || rate > 5) {
     return next(new AppError("rate must be between 1 and 5", 400));
   }
+  const cacheKey = `course:${courseId}`;
 
-  const course = await Course.findById(courseId);
+  const [course, existingRating] = await Promise.all([
+    cacheService.get(cacheKey).then(async (cachedCourse) => {
+      if (cachedCourse) return cachedCourse;
+      const foundCourse = await Course.findById(courseId).lean();
+      if (foundCourse) {
+        await cacheService.set(
+          cacheKey,
+          foundCourse,
+          cacheService.CACHE_DURATION.COURSE
+        );
+      }
+
+      return foundCourse;
+    }),
+    Rating.findOne({
+      user: user._id,
+      course: courseId,
+    })
+      .select("_id")
+      .lean(),
+  ]);
+
   if (!course) {
     return next(new AppError("no course found with this id", 404));
   }
+
   if (user.createdCourses.includes(courseId)) {
     return next(new AppError("you can't add rating to your own course", 400));
   }
   if (!user.enrolledCourses.includes(courseId)) {
     return next(new AppError("you are not enrolled in this course", 403));
   }
-  const existRatingIndex = course.ratings.findIndex(
-    (r) => r.user._id.toString() == user._id
-  );
+  const [, updatedCourse] = await Promise.all([
+    Rating.findOneAndUpdate(
+      {
+        user: user._id,
+        course: courseId,
+      },
+      { rate },
+      { new: true, upsert: true }
+    ),
+    updateCourseRatingSummary(courseId),
+  ]);
 
-  if (existRatingIndex > -1) {
-    course.ratings[existRatingIndex].rate = rate;
-  } else {
-    course.ratings.push({ user: user._id, rate });
+  await cacheService.del(cacheKey);
+  res.status(200).json({
+    message: existingRating
+      ? "Rating updated successfully"
+      : "Rating added successfully",
+    averageRating: updatedCourse.ratingsSummary.averageRating,
+    totalRating: updatedCourse.ratingsSummary.totalRating,
+  });
+});
+
+export const removeRatingFromCourse = catchAsync(async (req, res, next) => {
+  const { courseId } = req.params;
+  const user = req.user;
+
+  const cacheKey = `course:${courseId}`;
+  let course = await cacheService.get(cacheKey);
+
+  if (!course) {
+    course = await Course.findById(courseId);
+    if (!course) {
+      return next(new AppError("No course found with this id", 404));
+    }
+    await cacheService.set(
+      cacheKey,
+      course,
+      cacheService.CACHE_DURATION.COURSE
+    );
   }
-  const averageRating =
-    course.ratings.reduce((acc, r) => acc + r.rate, 0) / course.ratings.length;
 
-  course.averageRating = averageRating;
+  const deleteRating = await Rating.findOneAndDelete({
+    user: user._id,
+    course: courseId,
+  });
+  if (!deleteRating) {
+    return next(new AppError("No rating found with this id", 404));
+  }
 
-  await course.save();
+  const updatedCourse = await updateCourseRatingSummary(courseId);
 
-  res.status(200).json({ message: "Rating added successfully", averageRating });
+  res.status(200).json({
+    message: "Rating deleted successfully",
+    averageRating: updatedCourse.ratingsSummary.averageRating,
+  });
 });
 
 export const checkCourseIsCompleted = catchAsync(async (req, res, next) => {
@@ -338,5 +487,99 @@ export const generateCertifcate = catchAsync(async (req, res, next) => {
   res.status(200).json({
     message: "certificate generated successfuly",
     data: { url: cloudinaryResult.secure_url },
+  });
+});
+
+export const getCourseStats = catchAsync(async (req, res, next) => {
+  const { courseId } = req.params;
+  const user = req.user;
+
+  if (!user.createdCourses.includes(courseId)) {
+    return next(new AppError("not authorize", 403));
+  }
+
+  const cacheKey = `course:${courseId}`;
+  let course = await cacheService.get(cacheKey);
+  if (!course) {
+    course = await Course.findById(courseId).populate("chapters");
+    if (!course) {
+      return next(new AppError("no course found with this id", 404));
+    }
+    await cacheService.set(
+      cacheKey,
+      course,
+      cacheService.CACHE_DURATION.COURSE
+    );
+  }
+
+  const totalEnrollments = await Enrollment.countDocuments({
+    course: courseId,
+  });
+  const completedCount = await Progress.countDocuments({
+    course: courseId,
+    percentageCompleted: 100,
+  });
+  const completionRate = totalEnrollments
+    ? ((completedCount / totalEnrollments) * 100).toFixed(1)
+    : 0;
+  const totalLessons = course.chapters.reduce(
+    (sum, chapter) => sum + chapter.lessons.length,
+    0
+  );
+
+  res.status(200).json({
+    data: {
+      courseTitle: course.title,
+      totalLessons,
+      completedCount,
+      completionRate: `${completionRate}%`,
+      averageRating: course.ratingsSummary.averageRating,
+      totalRating: course.ratingsSummary.totalRatings,
+      totalEnrollments,
+    },
+  });
+});
+
+export const getCourseProgressStats = catchAsync(async (req, res, next) => {
+  const user = req.user;
+  const { courseId } = req.params;
+
+  if (!user.createdCourses.includes(courseId)) {
+    return next(new AppError("not authorize", 403));
+  }
+  const progressRecords = await Progress.find({ course: courseId });
+
+  const progressDistribution = {
+    notStarted: 0, // 0%
+    started: 0, // 1-25%
+    inProgress: 0, // 26-75%
+    nearlyDone: 0, // 76-99%
+    completed: 0, // 100%
+  };
+
+  progressRecords.forEach((record) => {
+    const progress = record.percentageCompleted;
+    if (progress == 0) progressDistribution.notStarted++;
+    else if (progress <= 25) progressDistribution.started;
+    else if (progress <= 75) progressDistribution.inProgress++;
+    else if (progress < 100) progressDistribution.nearlyDone++;
+    else progressDistribution.completed++;
+  });
+
+  const averageProgress = progressRecords.length
+    ? (
+        progressRecords.reduce(
+          (acc, record) => acc + record.percentageCompleted,
+          0
+        ) / progressRecords.length
+      ).toFixed(1)
+    : 0;
+
+  res.status(200).json({
+    data: {
+      progressDistribution,
+      averageProgress,
+      totalStudents: progressRecords.length,
+    },
   });
 });

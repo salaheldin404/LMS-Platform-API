@@ -8,7 +8,10 @@ import {
   getAllCourses,
   getCourseById,
   getCoursesForCurrentInstructor,
+  getCourseStats,
   getSearchCourses,
+  removeRatingFromCourse,
+  getCourseProgressStats,
 } from "../controller/courseController.js";
 import { protectRoute } from "../middlewares/protect.js";
 import upload from "../utils/multerConfig.js";
@@ -29,10 +32,13 @@ router.post("/", upload.single("image"), createCourse);
 router.patch("/:courseId", upload.single("image"), editCourse);
 router.delete("/:courseId", deleteCourse);
 
+router.get("/:courseId/stats", getCourseStats);
+router.get("/:courseId/progress-stats", getCourseProgressStats);
+
 router.post("/:courseId/generate-certificate", generateCertifcate);
 
-
 router.post("/:courseId/rate", addRatingToCourse);
+router.delete("/:courseId/rate", removeRatingFromCourse);
 
 router.use("/:courseId/chapters", chapterRouter);
 
