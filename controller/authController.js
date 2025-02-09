@@ -8,7 +8,7 @@ import sendEmail from "../utils/email.js";
 import catchAsync from "../utils/catchAsync.js";
 import AppError from "../utils/appError.js";
 export const signup = catchAsync(async (req, res, next) => {
-  const { email, password, username, role } = req.body;
+  const { email, password, username } = req.body;
   if (!email || !password || !username) {
     return next(new AppError("fill all fields", 400));
   }
@@ -31,7 +31,6 @@ export const signup = catchAsync(async (req, res, next) => {
     email,
     username,
     password: hasedPassword,
-    role,
   });
   await newUser.save();
   newUser.password = undefined;
@@ -67,17 +66,24 @@ export const logout = catchAsync(async (req, res, next) => {
 
 export const refreshToken = catchAsync(async (req, res, next) => {
   const refreshTokenCookies = req.cookies.refreshToken;
+
   if (!refreshTokenCookies) {
     return next(new AppError("Token is missing", 401));
   }
 
-  const decode = jwt.verify(
-    refreshTokenCookies,
-    process.env.REFRESH_TOKEN_SECRET
-  );
-  if (!decode) {
-    return next(new AppError("Invalid token", 403));
+  let decode;
+  try {
+    // 3. Verify the refresh token
+    decode = jwt.verify(refreshTokenCookies, process.env.REFRESH_TOKEN_SECRET);
+  } catch (error) {
+    // Handle invalid or expired refresh token
+    return next(new AppError("Invalid or expired token", 403));
   }
+  // 4. Check if the decoded token contains the user ID
+  if (!decode || !decode.id) {
+    return next(new AppError("Invalid token payload", 403));
+  }
+
   const user = await User.findById(decode.id);
   if (!user) {
     return next(new AppError("User not found", 404));
@@ -134,12 +140,15 @@ export const checkResetToken = async (req, res, next) => {
 
 export const resetPassword = catchAsync(async (req, res, next) => {
   const { password, passwordConfirm } = req.body;
+
   if (!password || !passwordConfirm) {
     return next(new AppError("Please fill all fields.", 400));
   }
+
   if (password !== passwordConfirm) {
     return next(new AppError("password doesnt' match", 400));
   }
+
   const hashedToken = crypto
     .createHash("sha256")
     .update(req.params.token)
@@ -155,12 +164,20 @@ export const resetPassword = catchAsync(async (req, res, next) => {
   const salt = await bcrypt.genSalt(10);
   const hashedPassword = await bcrypt.hash(password, salt);
   user.password = hashedPassword;
+
   user.passwordResetExpires = undefined;
   user.passwordResetToken = undefined;
+
   await user.save({ validateBeforeSave: true });
-  user.password = undefined;
+
   const token = generateTokenAndSetCookies(res, user._id);
-  res.status(200).json({ data: { user, token } });
+  const userData = {
+    _id: user._id,
+    email: user.email,
+    role: user.role,
+    username: user.username,
+  };
+  res.status(200).json({ data: { userData, token } });
 });
 
 export const getCurrentUser = catchAsync(async (req, res, next) => {
@@ -168,5 +185,25 @@ export const getCurrentUser = catchAsync(async (req, res, next) => {
     .populate("enrolledCourses createdCourses")
     .select("-password");
 
+  res.status(200).json({ data: user });
+});
+
+export const getActiveSession = catchAsync(async (req, res, next) => {
+  const token = req.cookies.jwt;
+  if (!token) {
+    return res.status(204).end();
+  }
+  let decode;
+  try {
+    decode = jwt.verify(token, process.env.JWT_SECRET);
+  } catch (error) {
+    return next(new AppError("Invalid token", 403));
+  }
+
+  const user = await User.findById(decode.id).select("-password -__v");
+  if (!user) {
+    res.clearCookie("jwt");
+    return next(new AppError("User not found", 404));
+  }
   res.status(200).json({ data: user });
 });
