@@ -1,22 +1,16 @@
 import jwt from "jsonwebtoken";
 import User from "../models/userModel.js";
+import extractToken from "../utils/extractToken.js";
+import verifyToken from "../utils/verifyToken.js";
 export const protectRoute = async (req, res, next) => {
-  let token;
-  console.log('test')
   try {
-    if (
-      req.headers.authorization &&
-      req.headers.authorization.startsWith("Bearer")
-    ) {
-      token = req.headers.authorization.split(" ")[1];
-    } else if (req.cookies && req.cookies.jwt) {
-      token = req.cookies.jwt;
-    }
+    const token = extractToken(req);
+
     if (!token) {
       return res.status(401).json({ message: "Not authorized" });
     }
 
-    const decoded = jwt.verify(token, process.env.JWT_SECERET);
+    const decoded = verifyToken(token);
     const user = await User.findById(decoded.id).select("-password");
     if (!user) {
       return res.status(401).json({
@@ -31,6 +25,15 @@ export const protectRoute = async (req, res, next) => {
     req.user = user;
     next();
   } catch (error) {
+    if (error.name === "TokenExpiredError") {
+      return res
+        .status(401)
+        .json({ message: "Session expired. Please log in again." });
+    }
+    if (error.name === "JsonWebTokenError") {
+      return res.status(403).json({ message: "Invalid token." });
+    }
+
     console.log(error, "from protect middleware");
     return res.status(401).json({ message: "Not authorized" });
   }

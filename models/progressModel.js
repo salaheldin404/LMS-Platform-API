@@ -1,5 +1,6 @@
 import mongoose from "mongoose";
 const { Schema, model } = mongoose;
+
 const progressSchema = new Schema(
   {
     course: {
@@ -28,12 +29,14 @@ const progressSchema = new Schema(
         ref: "Lesson",
       },
     ],
-    percentageCompleted: {
+    progressPercentage: {
       type: Number,
       default: 0,
+      min: [0, "Progress cannot be negative"],
+      max: [100, "Progress cannot exceed 100%"],
     },
   },
-  { timestamps: true }
+  { timestamps: true, toJSON: { virtuals: true }, toObject: { virtuals: true } }
 );
 
 progressSchema.index({ user: 1, course: 1 }, { unique: true });

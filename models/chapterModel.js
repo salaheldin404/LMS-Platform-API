@@ -5,6 +5,8 @@ const chapterSchema = new Schema({
   title: {
     type: String,
     required: true,
+    minLength: [3, "Chapter title must be at least 3 characters"],
+    trim: true,
   },
   course: {
     type: Schema.Types.ObjectId,

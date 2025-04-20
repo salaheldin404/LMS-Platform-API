@@ -61,21 +61,26 @@ export const login = catchAsync(async (req, res, next) => {
 export const logout = catchAsync(async (req, res, next) => {
   res.cookie("jwt", "", { maxAge: 0 });
   res.cookie("refreshToken", "", { maxAge: 0 });
+
+  console.log("res.cookie", res.cookies);
   res.status(200).json({ message: "logout success" });
 });
 
 export const refreshToken = catchAsync(async (req, res, next) => {
-  const refreshTokenCookies = req.cookies.refreshToken;
-
+  const { refreshToken } = req.body;
+  console.log({ refreshToken }, "from refresh token function");
+  const refreshTokenCookies = req.cookies.refreshToken || refreshToken;
   if (!refreshTokenCookies) {
     return next(new AppError("Token is missing", 401));
   }
-
+  console.log("generate refresh token");
   let decode;
   try {
     // 3. Verify the refresh token
     decode = jwt.verify(refreshTokenCookies, process.env.REFRESH_TOKEN_SECRET);
   } catch (error) {
+    console.log("invalid token error", error);
+
     // Handle invalid or expired refresh token
     return next(new AppError("Invalid or expired token", 403));
   }
@@ -189,18 +194,29 @@ export const getCurrentUser = catchAsync(async (req, res, next) => {
 });
 
 export const getActiveSession = catchAsync(async (req, res, next) => {
-  const token = req.cookies.jwt;
-  if (!token) {
-    return res.status(204).end();
+  const authHeader = req.headers.authorization;
+  const headerToken = authHeader?.startsWith("Bearer ")
+    ? authHeader.split(" ")[1]
+    : undefined;
+  const token = req.cookies.jwt || headerToken;
+  if (!token || token == "undefined") {
+    return res.status(403).json({ message: "Unauthorized", data: null });
   }
   let decode;
   try {
     decode = jwt.verify(token, process.env.JWT_SECRET);
   } catch (error) {
+    console.log(error?.status, "error from get active session");
+    // console.log(error.name, "error name");
+    if (error.name == "TokenExpiredError") {
+      res.clearCookie("jwt"); // Clear expired token
+
+      return next(new AppError("Token expired", 401));
+    }
     return next(new AppError("Invalid token", 403));
   }
 
-  const user = await User.findById(decode.id).select("-password -__v");
+  const user = await User.findById(decode.id).select("-password -__v").lean();
   if (!user) {
     res.clearCookie("jwt");
     return next(new AppError("User not found", 404));
