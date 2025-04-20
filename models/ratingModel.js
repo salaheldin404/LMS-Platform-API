@@ -29,6 +29,7 @@ const ratingSchema = new Schema(
 
 ratingSchema.index({ course: 1, user: 1 }, { unique: true });
 ratingSchema.index({ course: 1, rate: 1 });
+ratingSchema.index({ course: 1 });
 
 const Rating = mongoose.models.Rating || model("Rating", ratingSchema);
 
