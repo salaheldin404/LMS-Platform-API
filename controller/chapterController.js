@@ -6,11 +6,16 @@ import Lesson from "../models/lessonModel.js";
 
 import catchAsync from "../utils/catchAsync.js";
 import AppError from "../utils/appError.js";
+import cacheService from "../utils/cacheService.js";
+import { deleteVideo } from "../utils/mux.js";
+
 export const createChapter = catchAsync(async (req, res, next) => {
   const { courseId } = req.params;
   const { title } = req.body;
 
   const course = await Course.findById(courseId);
+  const cacheKey = `course:${courseId}`;
+
   if (!course) {
     return next(new AppError("No course found with this ID", 404));
   }
@@ -29,7 +34,12 @@ export const createChapter = catchAsync(async (req, res, next) => {
   });
   await chapter.save();
   course.chapters.push(chapter);
-  await course.save();
+  await course.save({ runValidators: false });
+  // Clear the cache for the course
+  await cacheService.del(cacheKey);
+  // await cacheService.set(cacheKey, course, cacheService.CACHE_DURATION.COURSE);
+
+  console.log(course, chapter, "data");
   res.status(200).json({ data: chapter, message: "Chapter created" });
 });
 
@@ -65,6 +75,9 @@ export const editChapter = catchAsync(async (req, res, next) => {
   chapter.title = title || chapter.title;
   chapter.order = order || chapter.order;
   await chapter.save();
+  // Clear the cache for the course
+  const cacheKey = `course:${chapter.course._id}`;
+  await cacheService.del(cacheKey);
   res.status(200).json({ data: chapter });
 });
 
@@ -101,7 +114,10 @@ export const deleteChapter = async (req, res) => {
 
     await session.commitTransaction();
     session.endSession();
-    res.status(200).json({ message: "chapter deleted successfuly" });
+    // remove course from cache
+    const cacheKey = `course:${chapter.course}`;
+    await cacheService.del(cacheKey);
+    res.status(200).json({ message: "chapter deleted successfully" });
   } catch (error) {
     await session.abortTransaction();
     session.endSession();
@@ -116,7 +132,7 @@ export const deleteChapter = async (req, res) => {
 export const updateChapterOrder = catchAsync(async (req, res, next) => {
   const { courseId } = req.params;
   const { chapterIds } = req.body;
-
+  const cacheKey = `course:${courseId}`;
   if (!chapterIds || !Array.isArray(chapterIds)) {
     return next(new AppError("invalid request data"));
   }
@@ -127,6 +143,7 @@ export const updateChapterOrder = catchAsync(async (req, res, next) => {
       { order: i + 1 }
     );
   }
+  await cacheService.del(cacheKey);
 
   res.status(200).json({ message: "chapter order updated successfully" });
 });
