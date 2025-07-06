@@ -7,6 +7,9 @@ import enrollmentRoutes from "./routes/enrollmentRoutes.js";
 import lessonRoutes from "./routes/lessonRoutes.js";
 import chapterRoutes from "./routes/chapterRoutes.js";
 import userRoutes from "./routes/userRoutes.js";
+import ratingRoutes from "./routes/ratingRoutes.js";
+import cartRoutes from "./routes/cartRoutes.js";
+import wishlistRoutes from "./routes/wishlistRoutes.js";
 
 import globalError from "./controller/errorController.js";
 
@@ -19,9 +22,9 @@ import { rateLimit } from "express-rate-limit";
 
 const app = express();
 
-app.use(express.json({ limit: "10kb" }));
-
 app.use(helmet({ contentSecurityPolicy: false }));
+
+app.use(express.json({ limit: "10kb" }));
 
 app.use(cookieParser());
 
@@ -35,16 +38,20 @@ app.use(
 );
 
 const apiLimiter = rateLimit({
-  maximum: 100,
+  maximum: 200,
   windowMs: 60 * 60 * 1000,
   message: "Too many requests from this IP, please try again in an hour!",
 });
 
-app.use("/api", apiLimiter);
+// app.use("/api", apiLimiter);
 
 app.use(mongoSanitize());
 app.use(helmet.xssFilter());
-app.use(hpp());
+app.use(
+  hpp({
+    whitelist: ["category", "level"],
+  })
+);
 
 app.use(compression());
 
@@ -54,6 +61,9 @@ app.use("/api/v1/enrollments", enrollmentRoutes);
 app.use("/api/v1/lessons", lessonRoutes);
 app.use("/api/v1/chapters", chapterRoutes);
 app.use("/api/v1/users", userRoutes);
+app.use("/api/v1/ratings", ratingRoutes);
+app.use("/api/v1/cart", cartRoutes);
+app.use("/api/v1/wishlist", wishlistRoutes);
 
 app.get("/", (req, res) => {
   res.json({ message: "Hello World" });
