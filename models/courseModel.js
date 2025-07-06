@@ -1,7 +1,6 @@
 import mongoose from "mongoose";
 const { Schema, model } = mongoose;
 import slugify from "slugify";
-import AppError from "../utils/appError.js";
 
 const courseSchema = new Schema(
   {
@@ -137,6 +136,17 @@ courseSchema.virtual("ratings", {
   foreignField: "course",
 });
 
+courseSchema.virtual("totalDuration").get(function () {
+  return this.chapters?.reduce((acc, chapter) => acc + chapter?.duration, 0);
+});
+
+courseSchema.virtual("formattedTotalDuration").get(function () {
+  const totalSeconds = this.totalDuration;
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  return `${hours}h ${minutes}m`;
+});
+
 // courseSchema.virtual('instructor')
 
 courseSchema.virtual("enrollments", {
@@ -164,86 +174,16 @@ courseSchema.pre("save", function (next) {
   next();
 });
 
-courseSchema.pre("save", async function (next) {
-  if (this.status === "published") {
-    // Populate chapters and their lessons
-    await this.populate({
-      path: "chapters",
-      populate: {
-        path: "lessons",
-      },
-    });
-
-    // Check each chapter for at least one lesson
-    for (const chapter of this.chapters) {
-      if (!chapter.lessons || chapter.lessons.length === 0) {
-        return next(
-          new AppError(
-            `Chapter "${chapter.title}" must have at least one lesson when the course is published.`,
-            400
-          )
-        );
-        // throw new Error(
-        //   `Chapter "${chapter.title}" must have at least one lesson when the course is published.`
-        // );
-      }
-
-      // Iterate through each lesson in the chapter
-      for (const lesson of chapter.lessons) {
-        // Check if the lesson exists (in case a referenced lesson was deleted)
-        if (!lesson) {
-          return next(
-            new AppError(
-              `A referenced lesson in chapter "${chapter.title}" is missing.`,
-              400
-            )
-          );
-          // throw new Error(
-          //   `A referenced lesson in chapter "${chapter.title}" is missing.`
-          // );
-        }
-
-        // Check if the lesson has a video asset with all required fields
-        if (
-          !lesson.video ||
-          !lesson.video.assetId ||
-          !lesson.video.playbackId ||
-          !lesson.video.playbackUrl
-        ) {
-          return next(
-            new AppError(
-              `Lesson "${lesson.title}" in chapter "${chapter.title}" is missing a video asset.`,
-              400
-            )
-          );
-          // throw new Error(
-          //   `Lesson "${lesson.title}" in chapter "${chapter.title}" is missing a video asset.`
-          // );
-        }
-      }
-    }
-  }
-});
-
-// courseSchema.pre("find", function (next) {
-//   this.populate({
-//     path: "ratings",
-//     select: "rate comment user createdAt",
-//   });
-//   next();
-// });
-courseSchema.pre("findOne", function (next) {
+courseSchema.pre(/^find/, function (next) {
+  if (this.getOptions().skipRatingPopulate) return next();
   this.populate({
-    path: "chapters",
-    select: "title lessons order ",
-    options: { sort: { order: 1 } },
+    path: "ratings",
+    select: "rate comment user createdAt",
     populate: {
-      path: "lessons",
-      select: "title order video locked",
-      options: { sort: { order: 1 } },
+      path: "user",
+      select: "username profilePicture.url",
     },
   });
-
   next();
 });
 
