@@ -7,7 +7,7 @@ import AppError from "../utils/appError.js";
 // Population configuration reused across functions
 const cartPopulation = {
   path: "items.course",
-  select: "title price image.url instructor slug",
+  select: "title price image.url instructor slug description",
   populate: {
     path: "instructor",
     select: "username profilePicture.url",
