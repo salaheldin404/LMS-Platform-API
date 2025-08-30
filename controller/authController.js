@@ -34,8 +34,9 @@ export const signup = catchAsync(async (req, res, next) => {
   });
   await newUser.save();
   newUser.password = undefined;
-  const token = generateTokenAndSetCookies(res, newUser._id);
-  res.status(200).json({ data: { user: newUser, token } });
+  // const token = generateTokenAndSetCookies(res, newUser._id);
+  // res.status(200).json({ data: { user: newUser, token } });
+  res.status(200).json({ data: newUser });
 });
 
 export const login = catchAsync(async (req, res, next) => {
@@ -68,8 +69,8 @@ export const logout = catchAsync(async (req, res, next) => {
 
 export const refreshToken = catchAsync(async (req, res, next) => {
   const { refreshToken } = req.body;
-  console.log({ refreshToken }, "from refresh token function");
   const refreshTokenCookies = req.cookies.refreshToken || refreshToken;
+
   if (!refreshTokenCookies) {
     return next(new AppError("Token is missing", 401));
   }
@@ -109,7 +110,7 @@ export const forgetPassword = catchAsync(async (req, res) => {
     }
     const resetToken = user.createResetToken();
     await user.save({ validateBeforeSave: false });
-    const url = `${process.env.FRONTEND_URL}/resetPassword/${resetToken}`;
+    const url = `${process.env.FRONTEND_URL}/auth/reset-password/${resetToken}`;
     await sendEmail({
       email: user.email,
       subject: "Reset Password",
@@ -121,7 +122,7 @@ export const forgetPassword = catchAsync(async (req, res) => {
     user.passwordResetToken = undefined;
     user.passwordResetExpires = undefined;
     await user.save({ validateBeforeSave: false });
-    console.log(error);
+    console.log(error, "error from forget password");
     return next(new AppError("There was an error sending the email", 500));
     // res.status(500).json({ message: error.msg });
   }
@@ -144,13 +145,13 @@ export const checkResetToken = async (req, res, next) => {
 };
 
 export const resetPassword = catchAsync(async (req, res, next) => {
-  const { password, passwordConfirm } = req.body;
+  const { password, confirmPassword } = req.body;
 
-  if (!password || !passwordConfirm) {
+  if (!password || !confirmPassword) {
     return next(new AppError("Please fill all fields.", 400));
   }
 
-  if (password !== passwordConfirm) {
+  if (password !== confirmPassword) {
     return next(new AppError("password doesnt' match", 400));
   }
 
