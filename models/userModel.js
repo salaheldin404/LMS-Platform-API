@@ -1,6 +1,7 @@
 import mongoose from "mongoose";
 import crypto from "crypto";
 import mongooseLeanVirtuals from "mongoose-lean-virtuals";
+import slugify from "slugify";
 
 const { Schema, model } = mongoose;
 
@@ -149,6 +150,11 @@ const userSchema = new Schema(
         url: null,
       },
     },
+    slug: {
+      type: String,
+      unique: true,
+      index: true,
+    },
     passwordResetToken: String,
     passwordResetExpires: Date,
     passwordChangedAt: Date,
@@ -177,6 +183,17 @@ userSchema.virtual("socialLinks").get(function () {
     facebook: facebook ? `https://facebook.com/${facebook}` : null,
     instagram: instagram ? `https://instagram.com/${instagram}` : null,
   };
+});
+
+userSchema.pre("save", async function (next) {
+  if (!this.isModified("username")) return next();
+
+  this.slug = slugify(this.username, {
+    lower: true,
+    strict: true,
+    remove: /[*+~.()'"!:@]/g,
+  });
+  next();
 });
 
 userSchema.methods.changePasswordAfter = function (JWTTimestamp) {
